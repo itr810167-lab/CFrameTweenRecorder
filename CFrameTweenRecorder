@@ -9,14 +9,17 @@ local rootPart = character:WaitForChild("HumanoidRootPart")
 local recordedCFrames = {}
 local isPlaying = false
 local isLooping = false
-local trailEnabled = true
+local linesEnabled = true
 local pauseAtPoints = false
 local currentLerpRate = 8        -- множитель для Lerp за кадр (как в root.CFrame:Lerp(goal, dt * rate))
 local currentDelay = 0.1         -- Пауза после прибытия в точку (если включена)
 local SNAP_DISTANCE = 0.5        -- studs — порог, после которого точка считается достигнутой
 
--- Trail (эффект следа)
-local trailAttachment0, trailAttachment1, trail
+-- Линии между точками
+local linesFolder = Instance.new("Folder")
+linesFolder.Name = "CFrameRecorderLines"
+linesFolder.Parent = workspace
+local linePartsList = {}
 
 -- ====================================================================
 -- СОЗДАНИЕ ИНТЕРФЕЙСА (GUI)
@@ -149,20 +152,20 @@ local loopCorner = Instance.new("UICorner")
 loopCorner.CornerRadius = UDim.new(0, 6)
 loopCorner.Parent = loopBtn
 
--- Кнопка Trail
-local trailBtn = Instance.new("TextButton")
-trailBtn.Size = UDim2.new(0.9, 0, 0, 30)
-trailBtn.Position = UDim2.new(0.05, 0, 0, 213)
-trailBtn.BackgroundColor3 = Color3.fromRGB(50, 120, 50)
-trailBtn.Text = "След (Trail): ВКЛ"
-trailBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-trailBtn.Font = Enum.Font.SourceSansBold
-trailBtn.TextSize = 14
-trailBtn.Parent = mainFrame
+-- Кнопка: линии между точками
+local linesBtn = Instance.new("TextButton")
+linesBtn.Size = UDim2.new(0.9, 0, 0, 30)
+linesBtn.Position = UDim2.new(0.05, 0, 0, 213)
+linesBtn.BackgroundColor3 = Color3.fromRGB(50, 120, 50)
+linesBtn.Text = "Линии между точками: ВКЛ"
+linesBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+linesBtn.Font = Enum.Font.SourceSansBold
+linesBtn.TextSize = 14
+linesBtn.Parent = mainFrame
 
-local trailCorner = Instance.new("UICorner")
-trailCorner.CornerRadius = UDim.new(0, 6)
-trailCorner.Parent = trailBtn
+local linesCorner = Instance.new("UICorner")
+linesCorner.CornerRadius = UDim.new(0, 6)
+linesCorner.Parent = linesBtn
 
 -- Кнопка СТАРТ / СТОП
 local playBtn = Instance.new("TextButton")
@@ -195,44 +198,42 @@ clearCorner.CornerRadius = UDim.new(0, 6)
 clearCorner.Parent = clearBtn
 
 -- ====================================================================
--- TRAIL (СЛЕД)
+-- ЛИНИИ МЕЖДУ ТОЧКАМИ
 -- ====================================================================
 
-local function destroyTrail()
-	if trail then trail:Destroy() trail = nil end
-	if trailAttachment0 then trailAttachment0:Destroy() trailAttachment0 = nil end
-	if trailAttachment1 then trailAttachment1:Destroy() trailAttachment1 = nil end
+local function clearLines()
+	for _, part in ipairs(linePartsList) do
+		part:Destroy()
+	end
+	table.clear(linePartsList)
 end
 
-local function createTrail(part)
-	destroyTrail()
+local function createLineSegment(p0, p1)
+	local distance = (p1 - p0).Magnitude
+	if distance < 0.01 then return end
 
-	trailAttachment0 = Instance.new("Attachment")
-	trailAttachment0.Name = "TrailAttachment0"
-	trailAttachment0.Position = Vector3.new(0, 1, 0)
-	trailAttachment0.Parent = part
+	local part = Instance.new("Part")
+	part.Name = "PathLine"
+	part.Anchored = true
+	part.CanCollide = false
+	part.CanQuery = false
+	part.CastShadow = false
+	part.Material = Enum.Material.Neon
+	part.Color = Color3.fromRGB(0, 170, 255)
+	part.Size = Vector3.new(0.2, 0.2, distance)
+	part.CFrame = CFrame.new(p0, p1) * CFrame.new(0, 0, -distance / 2)
+	part.Parent = linesFolder
 
-	trailAttachment1 = Instance.new("Attachment")
-	trailAttachment1.Name = "TrailAttachment1"
-	trailAttachment1.Position = Vector3.new(0, -1, 0)
-	trailAttachment1.Parent = part
+	table.insert(linePartsList, part)
+end
 
-	trail = Instance.new("Trail")
-	trail.Attachment0 = trailAttachment0
-	trail.Attachment1 = trailAttachment1
-	trail.Lifetime = 1
-	trail.MinLength = 0
-	trail.WidthScale = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 1),
-		NumberSequenceKeypoint.new(1, 0),
-	})
-	trail.Color = ColorSequence.new(Color3.fromRGB(0, 170, 255), Color3.fromRGB(150, 0, 255))
-	trail.Transparency = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 0.2),
-		NumberSequenceKeypoint.new(1, 1),
-	})
-	trail.Enabled = false -- включаем только во время воспроизведения
-	trail.Parent = part
+local function rebuildLines()
+	clearLines()
+	if not linesEnabled then return end
+
+	for i = 1, #recordedCFrames - 1 do
+		createLineSegment(recordedCFrames[i].Position, recordedCFrames[i + 1].Position)
+	end
 end
 
 -- ====================================================================
@@ -304,17 +305,17 @@ loopBtn.MouseButton1Click:Connect(function()
 	if isPlaying then updateUI() end
 end)
 
--- Переключение Trail
-trailBtn.MouseButton1Click:Connect(function()
-	trailEnabled = not trailEnabled
-	if trailEnabled then
-		trailBtn.Text = "След (Trail): ВКЛ"
-		trailBtn.BackgroundColor3 = Color3.fromRGB(50, 120, 50)
+-- Переключение линий между точками
+linesBtn.MouseButton1Click:Connect(function()
+	linesEnabled = not linesEnabled
+	if linesEnabled then
+		linesBtn.Text = "Линии между точками: ВКЛ"
+		linesBtn.BackgroundColor3 = Color3.fromRGB(50, 120, 50)
 	else
-		trailBtn.Text = "След (Trail): ВЫКЛ"
-		trailBtn.BackgroundColor3 = Color3.fromRGB(90, 90, 90)
-		if trail then trail.Enabled = false end
+		linesBtn.Text = "Линии между точками: ВЫКЛ"
+		linesBtn.BackgroundColor3 = Color3.fromRGB(90, 90, 90)
 	end
+	rebuildLines()
 end)
 
 local function addPoint()
@@ -325,6 +326,7 @@ local function addPoint()
 	recordBtn.BackgroundColor3 = Color3.fromRGB(100, 200, 255)
 	task.delay(0.1, function() recordBtn.BackgroundColor3 = oldColor end)
 
+	rebuildLines()
 	updateUI()
 end
 
@@ -389,15 +391,7 @@ local function playBack()
 	isPlaying = true
 	updateUI()
 
-	if trail and trailEnabled then
-		trail.Enabled = true
-	end
-
 	playBackTweened()
-
-	if trail then
-		trail.Enabled = false
-	end
 
 	isPlaying = false
 	updateUI()
@@ -406,6 +400,7 @@ end
 local function clearPoints()
 	if isPlaying then return end
 	table.clear(recordedCFrames)
+	rebuildLines()
 	updateUI()
 end
 
@@ -420,12 +415,8 @@ clearBtn.MouseButton1Click:Connect(clearPoints)
 player.CharacterAdded:Connect(function(newCharacter)
 	character = newCharacter
 	rootPart = newCharacter:WaitForChild("HumanoidRootPart")
-	createTrail(rootPart)
 	if isPlaying then
 		isPlaying = false
 		updateUI()
 	end
 end)
-
--- Инициализация следа для текущего персонажа
-createTrail(rootPart)
