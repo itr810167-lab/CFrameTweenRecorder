@@ -1,0 +1,431 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+
+local player = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local rootPart = character:WaitForChild("HumanoidRootPart")
+
+-- Состояние скрипта
+local recordedCFrames = {}
+local isPlaying = false
+local isLooping = false
+local trailEnabled = true
+local pauseAtPoints = false
+local currentLerpRate = 8        -- множитель для Lerp за кадр (как в root.CFrame:Lerp(goal, dt * rate))
+local currentDelay = 0.1         -- Пауза после прибытия в точку (если включена)
+local SNAP_DISTANCE = 0.5        -- studs — порог, после которого точка считается достигнутой
+
+-- Trail (эффект следа)
+local trailAttachment0, trailAttachment1, trail
+
+-- ====================================================================
+-- СОЗДАНИЕ ИНТЕРФЕЙСА (GUI)
+-- ====================================================================
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "CustomCFrameRecorder"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = player:WaitForChild("PlayerGui")
+
+local mainFrame = Instance.new("Frame")
+mainFrame.Size = UDim2.new(0, 260, 0, 330)
+mainFrame.Position = UDim2.new(0.02, 0, 0.26, 0)
+mainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+mainFrame.BorderSizePixel = 0
+mainFrame.Active = true
+mainFrame.Draggable = true
+mainFrame.Parent = screenGui
+
+local panelCorner = Instance.new("UICorner")
+panelCorner.CornerRadius = UDim.new(0, 8)
+panelCorner.Parent = mainFrame
+
+-- Текст статуса
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Size = UDim2.new(1, 0, 0, 30)
+statusLabel.Position = UDim2.new(0, 0, 0, 5)
+statusLabel.BackgroundTransparency = 1
+statusLabel.Text = "Точек записано: 0"
+statusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+statusLabel.Font = Enum.Font.SourceSansBold
+statusLabel.TextSize = 16
+statusLabel.Parent = mainFrame
+
+-- Кнопка добавить точку
+local recordBtn = Instance.new("TextButton")
+recordBtn.Size = UDim2.new(0.9, 0, 0, 35)
+recordBtn.Position = UDim2.new(0.05, 0, 0, 35)
+recordBtn.BackgroundColor3 = Color3.fromRGB(0, 120, 255)
+recordBtn.Text = "Добавить точку"
+recordBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+recordBtn.Font = Enum.Font.SourceSansBold
+recordBtn.TextSize = 15
+recordBtn.Parent = mainFrame
+
+local recordCorner = Instance.new("UICorner")
+recordCorner.CornerRadius = UDim.new(0, 6)
+recordCorner.Parent = recordBtn
+
+-- Поле ввода: скорость сближения (Lerp Rate) — как dt * rate в Heartbeat
+local speedLabel = Instance.new("TextLabel")
+speedLabel.Size = UDim2.new(0.55, 0, 0, 25)
+speedLabel.Position = UDim2.new(0.05, 0, 0, 78)
+speedLabel.BackgroundTransparency = 1
+speedLabel.Text = "Скорость (Lerp Rate):"
+speedLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+speedLabel.Font = Enum.Font.SourceSans
+speedLabel.TextSize = 13
+speedLabel.TextXAlignment = Enum.TextXAlignment.Left
+speedLabel.Parent = mainFrame
+
+local speedInput = Instance.new("TextBox")
+speedInput.Size = UDim2.new(0.3, 0, 0, 25)
+speedInput.Position = UDim2.new(0.63, 0, 0, 78)
+speedInput.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+speedInput.BorderSizePixel = 0
+speedInput.Text = tostring(currentLerpRate)
+speedInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+speedInput.Font = Enum.Font.SourceSansBold
+speedInput.TextSize = 14
+speedInput.Parent = mainFrame
+
+local speedInputCorner = Instance.new("UICorner")
+speedInputCorner.CornerRadius = UDim.new(0, 4)
+speedInputCorner.Parent = speedInput
+
+-- Поле ввода: задержка между точками
+local delayLabel = Instance.new("TextLabel")
+delayLabel.Size = UDim2.new(0.55, 0, 0, 25)
+delayLabel.Position = UDim2.new(0.05, 0, 0, 110)
+delayLabel.BackgroundTransparency = 1
+delayLabel.Text = "Пауза в точке (сек):"
+delayLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+delayLabel.Font = Enum.Font.SourceSans
+delayLabel.TextSize = 13
+delayLabel.TextXAlignment = Enum.TextXAlignment.Left
+delayLabel.Parent = mainFrame
+
+local delayInput = Instance.new("TextBox")
+delayInput.Size = UDim2.new(0.3, 0, 0, 25)
+delayInput.Position = UDim2.new(0.63, 0, 0, 110)
+delayInput.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+delayInput.BorderSizePixel = 0
+delayInput.Text = tostring(currentDelay)
+delayInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+delayInput.Font = Enum.Font.SourceSansBold
+delayInput.TextSize = 14
+delayInput.Parent = mainFrame
+
+local delayCorner = Instance.new("UICorner")
+delayCorner.CornerRadius = UDim.new(0, 4)
+delayCorner.Parent = delayInput
+
+-- Кнопка: пауза в точках вкл/выкл
+local pauseBtn = Instance.new("TextButton")
+pauseBtn.Size = UDim2.new(0.9, 0, 0, 30)
+pauseBtn.Position = UDim2.new(0.05, 0, 0, 143)
+pauseBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+pauseBtn.Text = "Пауза в точках: ВЫКЛ"
+pauseBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
+pauseBtn.Font = Enum.Font.SourceSansBold
+pauseBtn.TextSize = 14
+pauseBtn.Parent = mainFrame
+
+local pauseCorner = Instance.new("UICorner")
+pauseCorner.CornerRadius = UDim.new(0, 6)
+pauseCorner.Parent = pauseBtn
+
+-- Кнопка Loop
+local loopBtn = Instance.new("TextButton")
+loopBtn.Size = UDim2.new(0.9, 0, 0, 30)
+loopBtn.Position = UDim2.new(0.05, 0, 0, 178)
+loopBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+loopBtn.Text = "Повтор (Loop): ВЫКЛ"
+loopBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
+loopBtn.Font = Enum.Font.SourceSansBold
+loopBtn.TextSize = 14
+loopBtn.Parent = mainFrame
+
+local loopCorner = Instance.new("UICorner")
+loopCorner.CornerRadius = UDim.new(0, 6)
+loopCorner.Parent = loopBtn
+
+-- Кнопка Trail
+local trailBtn = Instance.new("TextButton")
+trailBtn.Size = UDim2.new(0.9, 0, 0, 30)
+trailBtn.Position = UDim2.new(0.05, 0, 0, 213)
+trailBtn.BackgroundColor3 = Color3.fromRGB(50, 120, 50)
+trailBtn.Text = "След (Trail): ВКЛ"
+trailBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+trailBtn.Font = Enum.Font.SourceSansBold
+trailBtn.TextSize = 14
+trailBtn.Parent = mainFrame
+
+local trailCorner = Instance.new("UICorner")
+trailCorner.CornerRadius = UDim.new(0, 6)
+trailCorner.Parent = trailBtn
+
+-- Кнопка СТАРТ / СТОП
+local playBtn = Instance.new("TextButton")
+playBtn.Size = UDim2.new(0.42, 0, 0, 35)
+playBtn.Position = UDim2.new(0.05, 0, 0, 253)
+playBtn.BackgroundColor3 = Color3.fromRGB(50, 150, 50)
+playBtn.Text = "Старт"
+playBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+playBtn.Font = Enum.Font.SourceSansBold
+playBtn.TextSize = 15
+playBtn.Parent = mainFrame
+
+local playCorner = Instance.new("UICorner")
+playCorner.CornerRadius = UDim.new(0, 6)
+playCorner.Parent = playBtn
+
+-- Кнопка ОЧИСТИТЬ
+local clearBtn = Instance.new("TextButton")
+clearBtn.Size = UDim2.new(0.42, 0, 0, 35)
+clearBtn.Position = UDim2.new(0.53, 0, 0, 253)
+clearBtn.BackgroundColor3 = Color3.fromRGB(150, 50, 50)
+clearBtn.Text = "Очистить"
+clearBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+clearBtn.Font = Enum.Font.SourceSansBold
+clearBtn.TextSize = 15
+clearBtn.Parent = mainFrame
+
+local clearCorner = Instance.new("UICorner")
+clearCorner.CornerRadius = UDim.new(0, 6)
+clearCorner.Parent = clearBtn
+
+-- ====================================================================
+-- TRAIL (СЛЕД)
+-- ====================================================================
+
+local function destroyTrail()
+	if trail then trail:Destroy() trail = nil end
+	if trailAttachment0 then trailAttachment0:Destroy() trailAttachment0 = nil end
+	if trailAttachment1 then trailAttachment1:Destroy() trailAttachment1 = nil end
+end
+
+local function createTrail(part)
+	destroyTrail()
+
+	trailAttachment0 = Instance.new("Attachment")
+	trailAttachment0.Name = "TrailAttachment0"
+	trailAttachment0.Position = Vector3.new(0, 1, 0)
+	trailAttachment0.Parent = part
+
+	trailAttachment1 = Instance.new("Attachment")
+	trailAttachment1.Name = "TrailAttachment1"
+	trailAttachment1.Position = Vector3.new(0, -1, 0)
+	trailAttachment1.Parent = part
+
+	trail = Instance.new("Trail")
+	trail.Attachment0 = trailAttachment0
+	trail.Attachment1 = trailAttachment1
+	trail.Lifetime = 1
+	trail.MinLength = 0
+	trail.WidthScale = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 1),
+		NumberSequenceKeypoint.new(1, 0),
+	})
+	trail.Color = ColorSequence.new(Color3.fromRGB(0, 170, 255), Color3.fromRGB(150, 0, 255))
+	trail.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.2),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	trail.Enabled = false -- включаем только во время воспроизведения
+	trail.Parent = part
+end
+
+-- ====================================================================
+-- ЛОГИКА РАБОТЫ СКРИПТА
+-- ====================================================================
+
+local function updateUI()
+	if isPlaying then
+		statusLabel.Text = isLooping and "🔁 Цикл воспроизведения..." or "▶️ Воспроизведение..."
+		statusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+		playBtn.Text = "Стоп"
+		playBtn.BackgroundColor3 = Color3.fromRGB(180, 100, 0)
+	else
+		statusLabel.Text = "Точек записано: " .. #recordedCFrames
+		statusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+		playBtn.Text = "Старт"
+		playBtn.BackgroundColor3 = Color3.fromRGB(50, 150, 50)
+	end
+end
+
+-- Валидация скорости сближения
+speedInput.FocusLost:Connect(function()
+	local num = tonumber(speedInput.Text)
+	if num and num > 0 then
+		currentLerpRate = num
+	else
+		currentLerpRate = 8
+		speedInput.Text = "8"
+	end
+end)
+
+-- Валидация паузы между точками
+delayInput.FocusLost:Connect(function()
+	local num = tonumber(delayInput.Text)
+	if num and num >= 0 then
+		currentDelay = num
+	else
+		currentDelay = 0.1
+		delayInput.Text = "0.1"
+	end
+end)
+
+-- Переключение паузы в точках
+pauseBtn.MouseButton1Click:Connect(function()
+	pauseAtPoints = not pauseAtPoints
+	if pauseAtPoints then
+		pauseBtn.Text = "Пауза в точках: ВКЛ"
+		pauseBtn.BackgroundColor3 = Color3.fromRGB(50, 120, 50)
+		pauseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+	else
+		pauseBtn.Text = "Пауза в точках: ВЫКЛ"
+		pauseBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+		pauseBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
+	end
+end)
+
+-- Переключение Loop
+loopBtn.MouseButton1Click:Connect(function()
+	isLooping = not isLooping
+	if isLooping then
+		loopBtn.Text = "Повтор (Loop): ВКЛ"
+		loopBtn.BackgroundColor3 = Color3.fromRGB(50, 120, 50)
+		loopBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+	else
+		loopBtn.Text = "Повтор (Loop): ВЫКЛ"
+		loopBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+		loopBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
+	end
+	if isPlaying then updateUI() end
+end)
+
+-- Переключение Trail
+trailBtn.MouseButton1Click:Connect(function()
+	trailEnabled = not trailEnabled
+	if trailEnabled then
+		trailBtn.Text = "След (Trail): ВКЛ"
+		trailBtn.BackgroundColor3 = Color3.fromRGB(50, 120, 50)
+	else
+		trailBtn.Text = "След (Trail): ВЫКЛ"
+		trailBtn.BackgroundColor3 = Color3.fromRGB(90, 90, 90)
+		if trail then trail.Enabled = false end
+	end
+end)
+
+local function addPoint()
+	if isPlaying or not rootPart then return end
+	table.insert(recordedCFrames, rootPart.CFrame)
+
+	local oldColor = recordBtn.BackgroundColor3
+	recordBtn.BackgroundColor3 = Color3.fromRGB(100, 200, 255)
+	task.delay(0.1, function() recordBtn.BackgroundColor3 = oldColor end)
+
+	updateUI()
+end
+
+-- Плавное сближение с точкой через Heartbeat + экспоненциальный Lerp,
+-- в точности как в одиночном "how it should tp me" сниппете, но по цепочке точек.
+local function moveToPoint(goal)
+	local reached = false
+	local con
+	con = RunService.Heartbeat:Connect(function(dt)
+		if not isPlaying or not rootPart.Parent then
+			reached = true
+			con:Disconnect()
+			return
+		end
+
+		rootPart.CFrame = rootPart.CFrame:Lerp(goal, math.clamp(dt * currentLerpRate, 0, 1))
+
+		if (rootPart.Position - goal.Position).Magnitude <= SNAP_DISTANCE then
+			rootPart.CFrame = goal
+			reached = true
+			con:Disconnect()
+		end
+	end)
+
+	while not reached do
+		task.wait()
+	end
+end
+
+local function playBackTweened()
+	while isPlaying and #recordedCFrames > 0 do
+		for _, targetCFrame in ipairs(recordedCFrames) do
+			if not isPlaying then break end
+
+			moveToPoint(targetCFrame)
+
+			if not isPlaying then break end
+
+			if pauseAtPoints and currentDelay > 0 then
+				task.wait(currentDelay)
+			end
+		end
+
+		if not isLooping then break end
+	end
+end
+
+local function playBack()
+	if #recordedCFrames == 0 then return end
+
+	if isPlaying then
+		-- Если уже играет, нажатие кнопки Старт/R работает как СТОП
+		isPlaying = false
+		return
+	end
+
+	if #recordedCFrames < 2 then
+		-- Недостаточно точек для твина
+		return
+	end
+
+	isPlaying = true
+	updateUI()
+
+	if trail and trailEnabled then
+		trail.Enabled = true
+	end
+
+	playBackTweened()
+
+	if trail then
+		trail.Enabled = false
+	end
+
+	isPlaying = false
+	updateUI()
+end
+
+local function clearPoints()
+	if isPlaying then return end
+	table.clear(recordedCFrames)
+	updateUI()
+end
+
+-- Обработка событий мыши
+recordBtn.MouseButton1Click:Connect(addPoint)
+playBtn.MouseButton1Click:Connect(function() task.spawn(playBack) end)
+clearBtn.MouseButton1Click:Connect(clearPoints)
+
+-- Клавиатура (в данный момент не используется — точки и старт/стоп только по кнопкам)
+
+-- Сброс при смерти/респавне
+player.CharacterAdded:Connect(function(newCharacter)
+	character = newCharacter
+	rootPart = newCharacter:WaitForChild("HumanoidRootPart")
+	createTrail(rootPart)
+	if isPlaying then
+		isPlaying = false
+		updateUI()
+	end
+end)
+
+-- Инициализация следа для текущего персонажа
+createTrail(rootPart)
